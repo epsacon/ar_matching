@@ -1,0 +1,48 @@
+# Initialize git
+git init
+
+# Verify it worked
+git status
+```
+
+## Step 6: Create .gitignore
+
+Create a file named `.gitignore` in your project root:
+```
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Environment variables
+.env
+*.env
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+Test_Cases/
+
+# OS
+Thumbs.db
