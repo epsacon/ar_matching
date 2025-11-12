@@ -1,12 +1,31 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Security, Depends  # ADD Security, Depends
+from fastapi.security import APIKeyHeader  # ADD this line
 from pydantic import BaseModel
 from typing import List, Optional, Dict
 import uvicorn
 from rapidfuzz import fuzz
 from datetime import datetime
 from collections import defaultdict
+import os  # ADD this if not already imported
 
 app = FastAPI(title="AR Reconciliation Engine", version="11.0")
+
+# API Key Security
+API_KEY_NAME = "X-API-Key"
+api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
+def get_api_key(api_key: str = Security(api_key_header)):
+    """Validate API key from header"""
+    correct_api_key = os.getenv("API_KEY")
+    if not correct_api_key:
+        raise HTTPException(status_code=500, detail="API_KEY not configured on server")
+    if api_key != correct_api_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API Key"
+        )
+    return api_key
+# === END OF SECURITY SECTION ===
+
 @app.get("/health")
 async def health_check():
     return {
@@ -14,7 +33,7 @@ async def health_check():
         "service": "ar-matching-api",
         "version": "1.0.0"
     }
-#test
+
 # === 1. INPUT MODELS (NO FEES) ===
 class Payment(BaseModel):
     payment_id: str
@@ -119,7 +138,7 @@ def payment_terms_score(pay_hint: str, inv_terms: str) -> float:
     return 0.0
 
 # === 4. ENGINE: 1:1 → N:1 → 1:N ===
-@app.post("/reconcile", response_model=ReconciliationResponse)
+@app.post("/reconcile", response_model=ReconciliationResponse, dependencies=[Depends(get_api_key)])
 async def reconcile(request: ReconciliationRequest):
     if len(request.payments) > 1000 or len(request.open_items) > 1000:
         raise HTTPException(400, "Max 1000 payments and 1000 open items")
