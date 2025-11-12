@@ -9,7 +9,10 @@ from collections import defaultdict
 import os  # ADD this if not already imported
 
 app = FastAPI(title="AR Reconciliation Engine", version="11.0")
-
+# === DEBUG: Check if API_KEY is loaded ===
+print(f"DEBUG: API_KEY environment variable loaded: {os.getenv('API_KEY') is not None}")
+print(f"DEBUG: API_KEY value (first 10 chars): {os.getenv('API_KEY', 'NOT_SET')[:10]}")
+# === END DEBUG ===
 # API Key Security
 API_KEY_NAME = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
