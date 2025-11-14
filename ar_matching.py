@@ -1,14 +1,18 @@
-from fastapi import FastAPI, HTTPException, Security, Depends  # ADD Security, Depends
-from fastapi.security import APIKeyHeader  # ADD this line
+from fastapi import FastAPI, Request, HTTPException, Security, Depends
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 import uvicorn
 from rapidfuzz import fuzz
 from datetime import datetime
 from collections import defaultdict
-import os  # ADD this if not already imported
-
+import os
+from dotenv import load_dotenv
+import json
+load_dotenv()  # This loads API_KEY from .env when running locally
 app = FastAPI(title="AR Reconciliation Engine", version="11.0")
+
+
 # === DEBUG: Check if API_KEY is loaded ===
 print(f"DEBUG: API_KEY environment variable loaded: {os.getenv('API_KEY') is not None}")
 print(f"DEBUG: API_KEY value (first 10 chars): {os.getenv('API_KEY', 'NOT_SET')[:10]}")
@@ -18,6 +22,7 @@ API_KEY_NAME = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
 def get_api_key(api_key: str = Security(api_key_header)):
     """Validate API key from header"""
+
     correct_api_key = os.getenv("API_KEY")
     if not correct_api_key:
         raise HTTPException(status_code=500, detail="API_KEY not configured on server")
@@ -40,12 +45,12 @@ async def health_check():
 # === 1. INPUT MODELS (NO FEES) ===
 class Payment(BaseModel):
     payment_id: str
-    invoice_ids: List[str] = []           # Must list all target invoices
+    invoice_ids: List[str] = []
     customer_name: str = ""
     memo_text: str = ""
-    amount: float                         # WHAT YOU RECEIVE
-    is_negative_payment: bool = False     # True = credit
-    payment_date: str                     # YYYYMMDD
+    amount: float
+    is_negative_payment: bool = False
+    payment_date: str
     value_date: Optional[str] = None
     payment_terms_hint: str = ""
 
@@ -99,6 +104,19 @@ class ReconciliationResponse(BaseModel):
     no_match: List[MatchGroup]
     summary: ReconciliationSummary
 
+class ValidationError(BaseModel):
+    location: str
+    type: str
+    message: str
+    input_value: Optional[str] = None
+
+class ValidationResponse(BaseModel):
+    valid: bool
+    errors: Optional[List[ValidationError]] = None
+    message: str
+    expected_format: Optional[Dict[str, Any]] = None
+    suggestions: Optional[List[str]] = None
+
 # === 3. SCORING FUNCTIONS ===
 def name_score(p1: str, p2: str) -> float:
     if not p1 or not p2: return 0.0
@@ -140,7 +158,189 @@ def payment_terms_score(pay_hint: str, inv_terms: str) -> float:
     if inv_norm in {"NET 30", "NET 15", "DUE ON RECEIPT", "2/10 NET 30"}: return 50.0
     return 0.0
 
+
+def create_detailed_error_message(validation_error) -> Dict[str, Any]:
+    """Convert Pydantic validation errors into LLM-friendly instructions"""
+    errors = []
+    suggestions = []
+
+    for error in validation_error.errors():
+        location = " -> ".join(str(loc) for loc in error['loc'])
+        error_type = error['type']
+        message = error['msg']
+
+        error_detail = ValidationError(
+            location=location,
+            type=error_type,
+            message=message,
+            input_value=str(error.get('input', ''))[:100]
+        )
+        errors.append(error_detail)
+
+        # Generate specific suggestions based on error message content
+        if 'YYYYMMDD' in message:
+            suggestions.append(f"Fix date format at {location}: Use YYYYMMDD format (e.g., '20250115'), not YYYY-MM-DD")
+        elif 'greater than zero' in message or 'positive' in message:
+            suggestions.append(f"Fix amount at {location}: Must be a positive number greater than 0")
+        elif 'empty string' in message:
+            suggestions.append(f"Fix empty value at {location}: Field cannot be an empty string")
+        elif 'must be a boolean' in message:
+            suggestions.append(f"Fix boolean at {location}: Use true or false (not 'true', 'false', 1, or 0)")
+        elif 'must be a number, not a string' in message:
+            suggestions.append(f"Fix number format at {location}: Use numeric value (e.g., 1000.50), not a string")
+        elif 'missing' in error_type:
+            field_name = location.split(' -> ')[-1]
+            suggestions.append(f"Add missing required field: {field_name} at {location}")
+        elif 'type' in error_type.lower() and 'missing' not in error_type:
+            suggestions.append(f"Fix data type at {location}: {message}")
+
+    return {
+        "errors": errors,
+        "suggestions": suggestions
+    }
+
 # === 4. ENGINE: 1:1 → N:1 → 1:N ===
+
+@app.post("/validate", response_model=ValidationResponse)
+async def validate_format(request: Request):
+    """
+    Validate the JSON format for reconciliation request.
+    Returns detailed instructions if format is incorrect.
+    """
+    try:
+        # First, try to parse the raw JSON
+        body = await request.body()
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError as e:
+            # JSON syntax error - malformed JSON
+            return ValidationResponse(
+                valid=False,
+                message="✗ Invalid JSON syntax. The JSON is malformed and cannot be parsed.",
+                errors=[ValidationError(
+                    location="json_root",
+                    type="json_syntax_error",
+                    message=f"JSON syntax error at line {e.lineno}, column {e.colno}: {e.msg}",
+                    #input_value=str(body[:200])  # First 200 chars
+                    input_value=body[:200].decode('utf-8', errors='ignore')
+                )],
+                suggestions=[
+                    "Check for missing or extra commas",
+                    "Check for missing or mismatched brackets: { } [ ]",
+                    "Check for missing or extra quotes around strings",
+                    "Validate your JSON using a JSON validator (jsonlint.com)",
+                    "Common errors: trailing commas, single quotes instead of double quotes, unescaped characters"
+                ],
+                expected_format=None
+            )
+
+        # Now validate the schema with Pydantic
+        ReconciliationRequest(**data)
+
+        return ValidationResponse(
+            valid=True,
+            message="✓ JSON format is correct and ready for processing.",
+            errors=None,
+            suggestions=None
+        )
+
+    except Exception as e:
+        # Handle validation errors
+        if hasattr(e, 'errors'):
+            error_details = create_detailed_error_message(e)
+
+            return ValidationResponse(
+                valid=False,
+                message="✗ JSON format validation failed. Please fix the errors below and resubmit.",
+                errors=error_details["errors"],
+                suggestions=error_details["suggestions"],
+                expected_format={
+                    "payments": [
+                        {
+                            "payment_id": "string (required)",
+                            "invoice_ids": ["list of strings (required, can be empty)"],
+                            "customer_name": "string (optional)",
+                            "memo_text": "string (optional)",
+                            "amount": "number (required)",
+                            "is_negative_payment": "boolean (optional, default: false)",
+                            "payment_date": "string YYYYMMDD (required)",
+                            "value_date": "string YYYYMMDD (optional)",
+                            "payment_terms_hint": "string (optional)"
+                        }
+                    ],
+                    "open_items": [
+                        {
+                            "invoice_id": "string (required)",
+                            "customer_name": "string (required)",
+                            "total_open_amount": "number (required)",
+                            "due_in_date": "string YYYYMMDD (required)",
+                            "isOpen": "boolean (optional, default: true)",
+                            "payment_terms": "string (optional)",
+                            "memo_line": "string (optional)",
+                            "is_credit": "boolean (optional, default: false)"
+                        }
+                    ]
+                }
+            )
+        else:
+            return ValidationResponse(
+                valid=False,
+                message=f"✗ Unexpected error: {str(e)}",
+                errors=[ValidationError(
+                    location="root",
+                    type="unexpected_error",
+                    message=str(e),
+                    input_value=None
+                )],
+                suggestions=[
+                    "Ensure your response is valid JSON",
+                    "Check that all required fields are present",
+                    "Do not wrap JSON in markdown code blocks"
+                ]
+            )
+
+
+@app.get("/schema")
+async def get_schema():
+    """
+    Return the expected JSON schema for LLM reference.
+    No authentication required.
+    """
+    return {
+        "description": "Expected JSON format for AR reconciliation",
+        "schema": ReconciliationRequest.schema(),
+        "example": {
+            "payments": [
+                {
+                    "payment_id": "PAY-001",
+                    "invoice_ids": ["INV-1001"],
+                    "customer_name": "Acme Corporation",
+                    "memo_text": "Payment for Invoice 1001",
+                    "amount": 5000.00,
+                    "is_negative_payment": False,
+                    "payment_date": "20250210",
+                    "value_date": "20250210",
+                    "payment_terms_hint": "NET 30"
+                }
+            ],
+            "open_items": [
+                {
+                    "invoice_id": "INV-1001",
+                    "customer_name": "Acme Corporation",
+                    "total_open_amount": 5000.00,
+                    "due_in_date": "20250215",
+                    "isOpen": True,
+                    "payment_terms": "NET 30",
+                    "memo_line": "Consulting services",
+                    "is_credit": False
+                }
+            ]
+        }
+    }
+
+
+# === NOW YOUR EXISTING @app.post("/reconcile") CONTINUES ===
+
 @app.post("/reconcile", response_model=ReconciliationResponse, dependencies=[Depends(get_api_key)])
 async def reconcile(request: ReconciliationRequest):
     if len(request.payments) > 1000 or len(request.open_items) > 1000:

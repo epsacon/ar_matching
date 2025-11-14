@@ -16,7 +16,7 @@ env/
 .DS_Store
 *.swp
 Test_Cases/
-test_matching_api.py
+test_*.py
 README.md
 *.md
 docker-compose.yml
