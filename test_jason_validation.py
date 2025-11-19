@@ -1,6 +1,6 @@
 import requests
 import json
-from pathlib import Pathp
+from pathlib import Path
 
 # === CONFIG ===
 VALIDATE_URL = "http://localhost:8000/validate"

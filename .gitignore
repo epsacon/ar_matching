@@ -44,5 +44,9 @@ ENV/
 htmlcov/
 Test_Cases/
 
+
 # OS
 Thumbs.db
+
+#Files
+
