@@ -1,0 +1,352 @@
+
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AR Reconciliation Matching API Input",
+  "description": "Schema for the accounts receivable reconciliation matching engine input data",
+  "type": "object",
+  "required": [
+    "payments",
+    "invoices"
+  ],
+  "properties": {
+    "payments": {
+      "type": "array",
+      "description": "Array of payment records to be matched against invoices",
+      "items": {
+        "type": "object",
+        "required": [
+          "payment_id",
+          "invoice_ids",
+          "customer_name",
+          "amount",
+          "payment_date",
+          "memo_text",
+          "is_negative_payment",
+          "payment_terms_hint"
+        ],
+        "properties": {
+          "payment_id": {
+            "type": "string",
+            "description": "Unique identifier for the payment record",
+            "example": "PAY-1001"
+          },
+          "invoice_ids": {
+            "type": "array",
+            "description": "Array of invoice IDs that this payment references (may be empty if unknown)",
+            "items": {
+              "type": "string"
+            },
+            "example": [
+              "INV-1001"
+            ]
+          },
+          "customer_name": {
+            "type": "string",
+            "description": "Name of the customer making the payment (can be empty string if unknown)",
+            "example": "Acme Corporation"
+          },
+          "amount": {
+            "type": "number",
+            "description": "Payment amount in dollars (positive number, regardless of is_negative_payment flag)",
+            "minimum": 0,
+            "example": 5000
+          },
+          "payment_date": {
+            "type": "string",
+            "description": "Date of payment in YYYYMMDD format",
+            "pattern": "^[0-9]{8}$",
+            "example": "20250115"
+          },
+          "memo_text": {
+            "type": "string",
+            "description": "Memo or notes associated with the payment (can be empty string)",
+            "example": "Invoice payment"
+          },
+          "is_negative_payment": {
+            "type": "boolean",
+            "description": "Flag indicating if this is a credit/refund (true) or a standard payment (false)",
+            "example": false
+          },
+          "payment_terms_hint": {
+            "type": "string",
+            "description": "Payment terms information if available (e.g., 'NET 30', can be empty string)",
+            "example": "NET 30"
+          }
+        }
+      }
+    },
+    "invoices": {
+      "type": "array",
+      "description": "Array of invoice records to match payments against",
+      "items": {
+        "type": "object",
+        "required": [
+          "invoice_id",
+          "customer_name",
+          "total_open_amount",
+          "due_in_date",
+          "isOpen",
+          "payment_terms",
+          "memo_line",
+          "is_credit"
+        ],
+        "properties": {
+          "invoice_id": {
+            "type": "string",
+            "description": "Unique identifier for the invoice",
+            "example": "INV-1001"
+          },
+          "customer_name": {
+            "type": "string",
+            "description": "Name of the customer associated with this invoice",
+            "example": "Acme Corporation"
+          },
+          "total_open_amount": {
+            "type": "number",
+            "description": "Outstanding amount on the invoice in dollars (positive for regular invoices, can be negative for credit memos)",
+            "example": 5000
+          },
+          "due_in_date": {
+            "type": "string",
+            "description": "Due date of the invoice in YYYYMMDD format",
+            "pattern": "^[0-9]{8}$",
+            "example": "20250215"
+          },
+          "isOpen": {
+            "type": "boolean",
+            "description": "Flag indicating if the invoice is still open/unpaid (true) or closed (false)",
+            "example": true
+          },
+          "payment_terms": {
+            "type": "string",
+            "description": "Payment terms for the invoice (e.g., 'NET 30', can be empty string)",
+            "example": "NET 30"
+          },
+          "memo_line": {
+            "type": "string",
+            "description": "Memo or notes associated with the invoice (can be empty string)",
+            "example": "Q4 Services"
+          },
+          "is_credit": {
+            "type": "boolean",
+            "description": "Flag indicating if this is a credit memo (true) or regular invoice (false)",
+            "example": false
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}
+
+# AR Reconciliation Matching API - Input Format Guide
+
+## Overview
+The API accepts a JSON object containing two arrays: `payments` and `invoices`. The matching engine will attempt to reconcile payments to invoices using various matching strategies.
+
+## Root Structure
+```json
+{
+  "payments": [ /* array of payment objects */ ],
+  "invoices": [ /* array of invoice objects */ ]
+}
+```
+
+## Payment Object Structure
+
+Each payment object represents a received payment that needs to be matched to one or more invoices.
+
+### Required Fields:
+- **payment_id** (string): Unique identifier for the payment
+  - Example: `"PAY-1001"`
+  
+- **invoice_ids** (array of strings): Invoice IDs referenced in the payment (can be empty array `[]`)
+  - Example: `["INV-1001"]` or `["INV-1001", "INV-1002"]`
+  - Use empty array `[]` when invoice reference is unknown
+  
+- **customer_name** (string): Name of customer making payment
+  - Example: `"Acme Corporation"`
+  - Can be empty string `""` if unknown
+  - May contain typos, abbreviations, or variations from invoice customer name
+  
+- **amount** (number): Payment amount in dollars (always positive)
+  - Example: `5000.0` or `3250.50`
+  - Always positive number, even for credits (use `is_negative_payment` flag instead)
+  
+- **payment_date** (string): Date in YYYYMMDD format
+  - Example: `"20250115"` for January 15, 2025
+  - Must be exactly 8 digits
+  
+- **memo_text** (string): Payment memo or notes
+  - Example: `"Invoice payment"` or `"Q4 Services Payment"`
+  - Can be empty string `""`
+  
+- **is_negative_payment** (boolean): Indicates if this is a credit/refund
+  - `true` for credits, refunds, or chargebacks
+  - `false` for standard payments
+  
+- **payment_terms_hint** (string): Payment terms if known
+  - Example: `"NET 30"` or `"NET 60"`
+  - Can be empty string `""`
+
+### Payment Example:
+```json
+{
+  "payment_id": "PAY-1001",
+  "invoice_ids": ["INV-1001"],
+  "customer_name": "Acme Corporation",
+  "amount": 5000.0,
+  "payment_date": "20250115",
+  "memo_text": "Invoice payment",
+  "is_negative_payment": false,
+  "payment_terms_hint": "NET 30"
+}
+```
+
+## Invoice Object Structure
+
+Each invoice object represents an outstanding invoice that payments should be matched against.
+
+### Required Fields:
+- **invoice_id** (string): Unique identifier for the invoice
+  - Example: `"INV-1001"`
+  
+- **customer_name** (string): Customer name on the invoice
+  - Example: `"Acme Corporation"`
+  - Should be the canonical/correct customer name
+  
+- **total_open_amount** (number): Outstanding balance on invoice
+  - Example: `5000.0` or `-500.0` (negative for credit memos)
+  - Positive for regular invoices, negative for credit memos
+  
+- **due_in_date** (string): Invoice due date in YYYYMMDD format
+  - Example: `"20250215"` for February 15, 2025
+  - Must be exactly 8 digits
+  
+- **isOpen** (boolean): Whether invoice is still open/unpaid
+  - `true` for open invoices
+  - `false` for closed/paid invoices
+  
+- **payment_terms** (string): Payment terms on the invoice
+  - Example: `"NET 30"` or `"NET 60"`
+  - Can be empty string `""`
+  
+- **memo_line** (string): Invoice memo or description
+  - Example: `"Q4 Services"`
+  - Can be empty string `""`
+  
+- **is_credit** (boolean): Whether this is a credit memo
+  - `true` for credit memos (negative amounts)
+  - `false` for regular invoices (positive amounts)
+
+### Invoice Example:
+```json
+{
+  "invoice_id": "INV-1001",
+  "customer_name": "Acme Corporation",
+  "total_open_amount": 5000.0,
+  "due_in_date": "20250215",
+  "isOpen": true,
+  "payment_terms": "NET 30",
+  "memo_line": "Q4 Services",
+  "is_credit": false
+}
+```
+
+## Complete Minimal Example:
+```json
+{
+  "payments": [
+    {
+      "payment_id": "PAY-1001",
+      "invoice_ids": ["INV-1001"],
+      "customer_name": "Acme Corporation",
+      "amount": 5000.0,
+      "payment_date": "20250115",
+      "memo_text": "Invoice payment",
+      "is_negative_payment": false,
+      "payment_terms_hint": "NET 30"
+    }
+  ],
+  "invoices": [
+    {
+      "invoice_id": "INV-1001",
+      "customer_name": "Acme Corporation",
+      "total_open_amount": 5000.0,
+      "due_in_date": "20250215",
+      "isOpen": true,
+      "payment_terms": "NET 30",
+      "memo_line": "Q4 Services",
+      "is_credit": false
+    }
+  ]
+}
+```
+
+## Important Notes for Test Data Generation:
+
+1. **Matching Types**: The engine handles three main scenarios:
+   - **1:1**: One payment matches one invoice
+   - **N:1**: Multiple payments match one invoice (split payments)
+   - **1:N**: One payment matches multiple invoices (consolidated payment)
+
+2. **Credit Memos**: 
+   - Payment: Set `is_negative_payment: true` and keep `amount` positive
+   - Invoice: Set `is_credit: true` and make `total_open_amount` negative
+
+3. **Name Variations**: Test data should include:
+   - Exact name matches
+   - Typos (e.g., "Acme Corp" vs "Acme Corporation")
+   - Abbreviations (e.g., "ABC Inc" vs "ABC Incorporated")
+   - Different formats (e.g., "LLC" vs "L.L.C.")
+
+4. **Amount Matching**:
+   - Exact matches (payment amount = invoice amount)
+   - Partial matches (payment < invoice)
+   - Overpayments (payment > invoice)
+   - Multi-invoice matches (payment = sum of multiple invoices)
+
+5. **Date Format**: Always use YYYYMMDD format:
+   - January 15, 2025 = `"20250115"`
+   - December 31, 2025 = `"20251231"`
+
+6. **Empty vs. Missing Fields**: 
+   - All required fields must be present
+   - Use empty string `""` for unknown text fields
+   - Use empty array `[]` for unknown invoice_ids
+   - Never omit required fields
+
+7. **Edge Cases to Consider**:
+   - Payment with no invoice_ids and no customer_name
+   - Multiple payments to same invoice
+   - Payment amount with cents (e.g., `2500.25`)
+   - Invoices with matching amounts but different customers
+   - Very similar customer names (test fuzzy matching threshold)
+
+----------------------------------------------------
+{
+  "payments": [
+    {
+      "payment_id": "PAY-XXXX",
+      "invoice_ids": ["INV-YYYY"],
+      "customer_name": "Customer Name Here",
+      "amount": 0.0,
+      "payment_date": "YYYYMMDD",
+      "memo_text": "",
+      "is_negative_payment": false,
+      "payment_terms_hint": ""
+    }
+  ],
+  "invoices": [
+    {
+      "invoice_id": "INV-YYYY",
+      "customer_name": "Customer Name Here",
+      "total_open_amount": 0.0,
+      "due_in_date": "YYYYMMDD",
+      "isOpen": true,
+      "payment_terms": "",
+      "memo_line": "",
+      "is_credit": false
+    }
+  ]
+}
